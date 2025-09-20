@@ -146,10 +146,54 @@ class TravleParser:
 
         return None
 
-# Registry for future games (NYT Connections, Spelling Bee, etc.)
-PARSERS: List[GameParser] = [WordleParser(), TravleParser()]
+class FoodguessrParser:
+    key = "foodguessr"
+    label = "FoodGuessr"
 
-# -------------------------
+    # Matches the common header line:
+    #   "I got 11,500 on the FoodGuessr Daily!"
+    RE_HEADER = re.compile(
+        r"(?im)^\s*I\s+got\s+(?P<pts>[\d,]+)\s+on\s+the\s+FoodGuessr\b"
+    )
+
+    # Fallback: find round lines and sum them:
+    #   "🌕🌕🌕🌑 3,500 (Round 1)"
+    RE_ROUND_LINE = re.compile(
+        r"(?im)^\s*.*?(?P<rpts>[\d,]+)\s*\(\s*Round\s*\d+\s*\)\s*$"
+    )
+
+    # Optional: generic points mention like "FoodGuessr ... 11500 pts"
+    RE_GENERIC = re.compile(
+        r"(?im)\bFoodGuessr\b[^\n]*?(?P<pts>[\d,]+)\s*(?:pts|points)\b"
+    )
+
+    def try_parse(self, text: str) -> Optional[ParsedScore]:
+        if not text or "foodguessr" not in text.lower():
+            return None
+
+        # normalize NBSPs/commas are handled when converting to int
+        # 1) Header "I got <pts> on the FoodGuessr ..."
+        m = self.RE_HEADER.search(text)
+        if m:
+            pts = int(m.group("pts").replace(",", ""))
+            return ParsedScore(self.key, self.label, None, -pts, f"{pts} pts")
+
+        # 2) Sum per-round points if present
+        rounds = [int(x.replace(",", "")) for x in self.RE_ROUND_LINE.findall(text)]
+        if rounds:
+            pts = sum(rounds)
+            return ParsedScore(self.key, self.label, None, -pts, f"{pts} pts")
+
+        # 3) Generic “... 11500 pts/points” after the word FoodGuessr
+        g = self.RE_GENERIC.search(text)
+        if g:
+            pts = int(g.group("pts").replace(",", ""))
+            return ParsedScore(self.key, self.label, None, -pts, f"{pts} pts")
+
+        return None
+
+# Registry for future games (NYT Connections, Spelling Bee, etc.)
+PARSERS: List[GameParser] = [WordleParser(), TravleParser(), FoodguessrParser()]# -------------------------
 # Slack app
 # -------------------------
 
@@ -343,13 +387,15 @@ def games(ack, respond):
     ack()
     lines = ["*Supported games:*"]
     for p in PARSERS:
-      if isinstance(p, WordleParser):
-          pattern = "Wordle <#> <n/6 or X/6>"
-      elif isinstance(p, TravleParser):
-          pattern = "Travle <#> <n/6 or X/?>"
-      else:
-          pattern = "See docs"
-      lines.append(f"• *{p.label}* (`{p.key}`) — share pattern: `{pattern}`")
+        if isinstance(p, WordleParser):
+            pattern = "Wordle <#> <n/6 or X/6>"
+        elif isinstance(p, TravleParser):
+            pattern = "Travle #<puzzle> <n/?>  or  #travle #<puzzle> +<n>"
+        elif isinstance(p, FoodguessrParser):
+            pattern = "“I got <points> on the FoodGuessr Daily!” or per-round lines"
+        else:
+            pattern = "See docs"
+        lines.append(f"• *{p.label}* (`{p.key}`) — share pattern: `{pattern}`")
     respond("\n".join(lines))
 
 
