@@ -1,0 +1,12 @@
+services:
+  - type: worker
+    name: slackbot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: USE_SOCKET_MODE
+        value: "true"
+      - key: DB_PATH
+        value: /data/scores.db
