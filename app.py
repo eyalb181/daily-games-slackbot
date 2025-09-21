@@ -319,6 +319,72 @@ def handle_messages(event, client, logger, body, say):
 # Slash commands
 # -------------------------
 
+@app.command("/todayboards")
+def todayboards(ack, respond, command):
+    """
+    Usage: /todayboards [@user]
+    Shows today's leaderboards for all games with entries in this channel.
+    If @user is provided, shows only games that user posted a score for today.
+    """
+    ack()
+    text = command.get("text", "") or ""
+    m = re.search(r"<@([A-Z0-9]+)>", text)
+    target_user = m.group(1) if m else None
+    day = _utc_today_str()
+    team_id = command["team_id"]
+    channel_id = command["channel_id"]
+
+    with _get_conn() as c:
+        if target_user:
+            games = c.execute(
+                """
+                SELECT DISTINCT game_key, game_label
+                FROM scores
+                WHERE workspace_id=? AND channel_id=? AND play_date=? AND user_id=?
+                ORDER BY game_label
+                """,
+                (team_id, channel_id, day, target_user),
+            ).fetchall()
+        else:
+            games = c.execute(
+                """
+                SELECT DISTINCT game_key, game_label
+                FROM scores
+                WHERE workspace_id=? AND channel_id=? AND play_date=?
+                ORDER BY game_label
+                """,
+                (team_id, channel_id, day),
+            ).fetchall()
+
+    if not games:
+        suffix = f" for <@{target_user}>" if target_user else ""
+        respond(f"No scoreboards for {day}{suffix} yet.")
+        return
+
+    blocks = []
+    title = f"Leaderboards for {day}" + (f" — for <@{target_user}>" if target_user else "")
+    blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*{title}*"}})
+
+    with _get_conn() as c:
+        for g in games:
+            gkey = g["game_key"]
+            glabel = g["game_label"]
+            rows = c.execute(
+                """
+                SELECT * FROM scores
+                WHERE workspace_id=? AND channel_id=? AND game_key=? AND play_date=?
+                ORDER BY score_value ASC, submitted_at ASC
+                """,
+                (team_id, channel_id, gkey, day),
+            ).fetchall()
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*{glabel}*"}})
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": _render_board(rows)}})
+            blocks.append({"type": "divider"})
+
+    respond(blocks=blocks)
+
+# -------------------------
+
 def _render_board(rows: Iterable[sqlite3.Row]) -> str:
     lines = ["*Rank*  *User*          *Score*    *When*"]
     rank = 1
