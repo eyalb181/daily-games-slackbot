@@ -465,6 +465,96 @@ def games(ack, respond):
     respond("\n".join(lines))
 
 
+@app.command("/leaderboards")
+def leaderboards(ack, respond, command):
+    """
+    Usage: /leaderboards
+    Shows all-time power rankings (average daily percentile) for ALL games
+    in the current channel. Percentile per day = 1.0 for 1st, 0.0 for last;
+    solo day counts as 1.0. Higher is better.
+    """
+    ack()
+    team_id = command["team_id"]
+    channel_id = command["channel_id"]
+
+    # Title block
+    blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": "*All-time leaderboards*"}}
+    ]
+
+    # One section per game in PARSERS
+    for parser in PARSERS:
+        game = parser.key
+        glabel = parser.label
+
+        # All-time power ranking for this game in this channel
+        sql = """
+        WITH base AS (
+          SELECT workspace_id, channel_id, user_id, game_key, play_date,
+                 score_value, submitted_at
+          FROM scores
+          WHERE workspace_id=? AND channel_id=? AND game_key=?
+        ),
+        ranked AS (
+          SELECT user_id, play_date,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY play_date
+                   ORDER BY score_value ASC, submitted_at ASC
+                 ) AS rn,
+                 COUNT(*) OVER (PARTITION BY play_date) AS cnt
+          FROM base
+        ),
+        percentiles AS (
+          SELECT user_id, play_date,
+                 CASE
+                   WHEN cnt <= 1 THEN 1.0
+                   ELSE 1.0 - ((rn - 1.0) / (cnt - 1.0))
+                 END AS p
+          FROM ranked
+        ),
+        agg AS (
+          SELECT user_id,
+                 COUNT(*) AS days_played,
+                 AVG(p)   AS avg_pct
+          FROM percentiles
+          GROUP BY user_id
+        )
+        SELECT user_id, days_played, avg_pct
+        FROM agg
+        ORDER BY avg_pct DESC, days_played DESC;
+        """
+
+        with _get_conn() as c:
+            rows = c.execute(sql, (team_id, channel_id, game)).fetchall()
+
+        if not rows:
+            # No history for this game in this channel; skip section
+            continue
+
+        # Build a small text leaderboard for this game
+        lines = [
+            f"*{glabel}*",
+            "*Rank*  *User*           *Avg pct*  *Days played*"
+        ]
+        rank = 1
+        for r in rows:
+            user = f"<@{r['user_id']}>"
+            avg_pct = f"{float(r['avg_pct']):.3f}"
+            days = int(r["days_played"])
+            lines.append(f"{rank:>2}. {user:<15} {avg_pct:>8}   {days:>12}")
+            rank += 1
+
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}})
+        blocks.append({"type": "divider"})
+
+    if len(blocks) == 1:
+        respond("No history yet in this channel.")
+    else:
+        # Remove trailing divider for neatness
+        if blocks[-1]["type"] == "divider":
+            blocks.pop()
+        respond(blocks=blocks)
+
 # -------------------------
 # Local dev server (Slash Commands via HTTP) or Socket Mode worker
 # -------------------------
