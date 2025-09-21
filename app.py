@@ -192,8 +192,63 @@ class FoodguessrParser:
 
         return None
 
+
+class GeoGridParser:
+    key = "geogrid"
+    label = "GeoGrid"
+
+    # Examples handled:
+    # 🟩🟩🟩
+    # 🟩🟩🟩
+    # ❌🟩❌
+    # Score: 316.5 | Rank: 1,138/1,402
+    # Elite Among Mortals 🎖️
+    # Board #533 | ♾️ Mode: Off
+    # https://geogridgame.com
+
+    RE_SCORE = re.compile(r"(?im)\bScore:\s*(?P<score>\d+(?:\.\d+)?)\b")
+    RE_RANK  = re.compile(r"(?im)\bRank:\s*(?P<cur>[\d,]+)\s*/\s*(?P<tot>[\d,]+)")
+    RE_BOARD = re.compile(r"(?im)\b(?:Board|Game)\s*#\s*(?P<num>[\d,]+)")
+
+    def try_parse(self, text: str) -> Optional[ParsedScore]:
+        if not text or ("geogrid" not in text.lower() and "geogridgame" not in text.lower()):
+            # Don’t be over-eager if the keyword isn’t present
+            return None
+
+        m_score = self.RE_SCORE.search(text)
+        if not m_score:
+            return None
+
+        # Parse score (float) and store as an INT with one decimal place precision (×10)
+        score_float = float(m_score.group("score"))
+        score_int10 = int(round(score_float * 10))
+
+        # Higher GeoGrid scores are better → store negative so ASC sort still works globally
+        score_value = -score_int10
+
+        # Optional board number
+        m_board = self.RE_BOARD.search(text)
+        game_number = m_board.group("num").replace(",", "") if m_board else None
+
+        # Optional rank (kept in raw for display)
+        m_rank = self.RE_RANK.search(text)
+        if m_rank:
+            cur = m_rank.group("cur")
+            tot = m_rank.group("tot")
+            raw = f"{score_float:g} pts (rank {cur}/{tot})"
+        else:
+            raw = f"{score_float:g} pts"
+
+        return ParsedScore(self.key, self.label, game_number, score_value, raw)
+    
 # Registry for future games (NYT Connections, Spelling Bee, etc.)
-PARSERS: List[GameParser] = [WordleParser(), TravleParser(), FoodguessrParser()]# -------------------------
+PARSERS: List[GameParser] = [
+    WordleParser(),
+    TravleParser(),
+    FoodguessrParser(),
+    GeoGridParser(),      # ← add this
+]
+
 # Slack app
 # -------------------------
 
@@ -456,9 +511,11 @@ def games(ack, respond):
         if isinstance(p, WordleParser):
             pattern = "Wordle <#> <n/6 or X/6>"
         elif isinstance(p, TravleParser):
-            pattern = "Travle #<puzzle> <n/?>  or  #travle #<puzzle> +<n>"
+            pattern = "Travle #<puzzle> <n/?>"
         elif isinstance(p, FoodguessrParser):
             pattern = "“I got <points> on the FoodGuessr Daily!” or per-round lines"
+        elif isinstance(p, GeoGridParser):
+            pattern = "Includes “Score: <float> | Rank: x/y” and “Board #<id>”"
         else:
             pattern = "See docs"
         lines.append(f"• *{p.label}* (`{p.key}`) — share pattern: `{pattern}`")
