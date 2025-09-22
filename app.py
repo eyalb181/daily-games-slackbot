@@ -398,12 +398,20 @@ def today(ack, respond, command):
 
     if not games:
         suffix = f" for <@{target_user}>" if target_user else ""
-        respond(response_type="in_channel", text=f"No scoreboards for {day}{suffix} yet.")
+        respond(response_type="in_channel", text=f"📭 No scoreboards for {day}{suffix} yet.")
         return
 
     blocks = []
-    title = f"Leaderboards for {day}" + (f" — for <@{target_user}>" if target_user else "")
-    blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*{title}*"}})
+    title = f"📊 Leaderboards for *{day}*" + (f" — for <@{target_user}> 🧑‍💻" if target_user else "")
+    blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": title}})
+
+    # Emoji per game
+    emoji_by_game = {
+        "wordle": "🟩",
+        "travle": "🗺️",
+        "foodguessr": "🍜",
+        "geogrid": "🌍",
+    }
 
     with _get_conn() as c:
         for g in games:
@@ -417,11 +425,15 @@ def today(ack, respond, command):
                 """,
                 (team_id, channel_id, gkey, day),
             ).fetchall()
-            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*{glabel}*"}})
-            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": _render_board(rows)}})
+
+            header_emoji = emoji_by_game.get(gkey, "🏆")
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"{header_emoji} *{glabel}*"}})
+            # Use medalized renderer
+            boards_text = _render_board_with_medals(rows)
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": boards_text}})
             blocks.append({"type": "divider"})
 
-    # Broadcast the results to everyone
+    # Broadcast to everyone in the channel
     respond(response_type="in_channel", blocks=blocks)
 
 # -------------------------
@@ -443,6 +455,27 @@ def _render_board(rows: Iterable[sqlite3.Row]) -> str:
         return "No entries yet. Share a result message to join today’s board!"
     return "\n".join(lines)
 
+
+def _render_board_with_medals(rows: Iterable[sqlite3.Row]) -> str:
+    """Like _render_board, but decorates top 3 with 🥇🥈🥉."""
+    lines = ["*Rank*  *User*          *Score*    *When*"]
+    medal_for = {1: "🥇", 2: "🥈", 3: "🥉"}
+    rank = 1
+    for r in rows:
+        user = f"<@{r['user_id']}>"
+        score = r["raw_score"]
+        when = r["submitted_at"].replace("T", " ").split(".")[0] + "Z"
+        link = r["message_link"]
+        medal = medal_for.get(rank, f"{rank:>2}.")
+        prefix = f"{medal}" if medal in ("🥇", "🥈", "🥉") else medal  # keep alignment for non-medal rows
+        if link:
+            lines.append(f"{prefix} {user:<14} {score:<10}  <{link}|permalink>")
+        else:
+            lines.append(f"{prefix} {user:<14} {score:<10}  {when}")
+        rank += 1
+    if rank == 1:
+        return "No entries yet. Share a result message to join today’s board!"
+    return "\n".join(lines)
 
 def _parse_args(text: str) -> Tuple[str, Optional[str]]:
     parts = [p for p in text.strip().split() if p]
