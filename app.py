@@ -359,10 +359,10 @@ def handle_messages(event, client, logger, body, say):
 # Slash commands
 # -------------------------
 
-@app.command("/todayboards")
-def todayboards(ack, respond, command):
+@app.command("/today")
+def today(ack, respond, command):
     """
-    Usage: /todayboards [@user]
+    Usage: /today [@user]
     Shows today's leaderboards for all games with entries in this channel.
     If @user is provided, shows only games that user posted a score for today.
     """
@@ -398,7 +398,7 @@ def todayboards(ack, respond, command):
 
     if not games:
         suffix = f" for <@{target_user}>" if target_user else ""
-        respond(f"No scoreboards for {day}{suffix} yet.")
+        respond(response_type="in_channel", text=f"No scoreboards for {day}{suffix} yet.")
         return
 
     blocks = []
@@ -421,7 +421,8 @@ def todayboards(ack, respond, command):
             blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": _render_board(rows)}})
             blocks.append({"type": "divider"})
 
-    respond(blocks=blocks)
+    # Broadcast the results to everyone
+    respond(response_type="in_channel", blocks=blocks)
 
 # -------------------------
 
