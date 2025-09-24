@@ -225,13 +225,54 @@ class GeoGridParser:
             raw = f"Score: {score_float:g}"
 
         return ParsedScore(self.key, self.label, game_number, score_value, raw)
-    
+
+class ConnectionsParser:
+    key = "connections"
+    label = "Connections"
+
+    # Typical share:
+    # Connections
+    # Puzzle #836
+    # 🟦🟦🟦🟦
+    # 🟨🟨🟨🟨
+    # 🟩🟩🟩🟩
+    # 🟪🟪🟪🟪
+    #
+    # Sometimes the app shows "Mistakes: 2/4" — we’ll use it if present.
+
+    RE_HEADER   = re.compile(r"(?im)^\s*connections\s*$")
+    RE_PUZZLE   = re.compile(r"(?im)^puzzle\s*#\s*(?P<num>[\d,]+)")
+    RE_MISTAKES = re.compile(r"(?im)\bmistakes?\s*:\s*(?P<m>\d+)\s*/\s*4\b")
+
+    def try_parse(self, text: str) -> Optional[ParsedScore]:
+        if not text:
+            return None
+        if not self.RE_HEADER.search(text):
+            return None
+
+        # Puzzle number (optional)
+        m_puz = self.RE_PUZZLE.search(text)
+        game_number = m_puz.group("num").replace(",", "") if m_puz else None
+
+        # Mistakes if present; lower is better. If missing, treat as 0 (perfect).
+        m_mis = self.RE_MISTAKES.search(text)
+        mistakes = int(m_mis.group("m")) if m_mis else 0
+
+        # raw string for display
+        raw = f"Mistakes: {mistakes}/4" if m_mis else "Solved"
+
+        # Ranking: fewer mistakes is better; tie-break by submission time
+        score_value = mistakes
+
+        return ParsedScore(self.key, self.label, game_number, score_value, raw)
+
 # Registry for future games (NYT Connections, Spelling Bee, etc.)
 PARSERS: List[GameParser] = [
     WordleParser(),
     TravleParser(),
     FoodguessrParser(),
-    GeoGridParser(),      # ← add this
+    GeoGridParser(),
+    ConnectionsParser(),  # ← add this
 ]
 
 # Slack app
@@ -535,6 +576,8 @@ def games(ack, respond):
             pattern = "“I got <points> on the FoodGuessr Daily!” or per-round lines"
         elif isinstance(p, GeoGridParser):
             pattern = "Includes “Score: <float> | Rank: x/y” and “Board #<id>”"
+        elif isinstance(p, ConnectionsParser):
+            pattern = "Includes “Connections” header; optional “Puzzle #<id>” and “Mistakes: n/4”"  
         else:
             pattern = "See docs"
         lines.append(f"• *{p.label}* (`{p.key}`) — share pattern: `{pattern}`")
