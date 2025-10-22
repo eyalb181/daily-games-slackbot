@@ -110,7 +110,62 @@ class WordleParser:
         score_val = 7 if raw_first == "X" else int(raw_first)
         return ParsedScore(self.key, self.label, num, score_val, raw)
 
+class CluesBySamParser:
+    key = "cluesbysam"
+    label = "Clues by Sam"
 
+    # Example header:
+    # "I solved the daily Clues by Sam (Oct 21st 2025) in 05:51"
+    RE_HEADER = re.compile(r"(?im)^\s*I\s+solved\b.*?\bClues by Sam\b.*?$", re.M)
+    RE_DATE   = re.compile(r"\((?P<when>[^)]+)\)")
+    # Captures h:mm:ss or mm:ss after the word "in"
+    RE_TIME   = re.compile(r"(?i)\bin\s+(?P<t>(?:\d{1,2}:)?\d{1,2}:\d{2})\b")
+
+    @staticmethod
+    def _iso_from_text(dtxt: str) -> Optional[str]:
+        # Try to turn "Oct 21st 2025" -> "2025-10-21"
+        try:
+            dtxt = re.sub(r"(\d+)(st|nd|rd|th)", r"\1", dtxt.strip(), flags=re.I)
+            from datetime import datetime
+            return datetime.strptime(dtxt, "%b %d %Y").date().isoformat()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _to_seconds(t: str) -> int:
+        # Accept "mm:ss" or "h:mm:ss"
+        parts = t.split(":")
+        if len(parts) == 2:
+            m, s = parts
+            return int(m) * 60 + int(s)
+        if len(parts) == 3:
+            h, m, s = parts
+            return int(h) * 3600 + int(m) * 60 + int(s)
+        raise ValueError("Bad time format")
+
+    def try_parse(self, text: str) -> Optional[ParsedScore]:
+        if not text or "clues by sam" not in text.lower():
+            return None
+        if not self.RE_HEADER.search(text):
+            return None
+
+        # Time (required)
+        mt = self.RE_TIME.search(text)
+        if not mt:
+            return None
+        time_str = mt.group("t")
+        seconds = self._to_seconds(time_str)  # lower is better
+
+        # Optional puzzle identifier from date in parentheses
+        md = self.RE_DATE.search(text)
+        game_number = None
+        if md:
+            iso = self._iso_from_text(md.group("when"))
+            game_number = iso or md.group("when")
+
+        # raw shows exactly the time (as on the share)
+        raw = time_str
+        return ParsedScore(self.key, self.label, game_number, seconds, raw)
 
 class TravleParser:
     key = "travle"
@@ -272,7 +327,9 @@ PARSERS: List[GameParser] = [
     TravleParser(),
     FoodguessrParser(),
     GeoGridParser(),
-    ConnectionsParser(),  # ← add this
+    ConnectionsParser(),  
+    CluesBySamParser(),   # ← add this
+
 ]
 
 # Slack app
@@ -578,6 +635,8 @@ def games(ack, respond):
             pattern = "Includes “Score: <float> | Rank: x/y” and “Board #<id>”"
         elif isinstance(p, ConnectionsParser):
             pattern = "Includes “Connections” header; optional “Puzzle #<id>” and “Mistakes: n/4”"  
+        elif isinstance(p, CluesBySamParser):
+            pattern = '“I solved the daily Clues by Sam (Mon Dd YYYY) in mm:ss”'
         else:
             pattern = "See docs"
         lines.append(f"• *{p.label}* (`{p.key}`) — share pattern: `{pattern}`")
