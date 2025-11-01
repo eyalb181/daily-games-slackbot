@@ -121,9 +121,17 @@ class CluesBySamParser:
     # Captures h:mm:ss or mm:ss after the word "in"
     RE_TIME   = re.compile(r"(?i)\bin\s+(?P<t>(?:\d{1,2}:)?\d{1,2}:\d{2})\b")
 
+    # Emoji tokens for mistake counting
+    TOKENS = {
+        "GREEN":  [ "🟩", ":large_green_square:" ],
+        "YELLOW": [ "🟨", ":large_yellow_square:" ],
+        "HINT":   [ "🟡", ":yellow_circle:" ],
+        "DHINT":  [ "🟠", ":orange_circle:", ":large_orange_circle:" ],
+    }
+
     @staticmethod
     def _iso_from_text(dtxt: str) -> Optional[str]:
-        # Try to turn "Oct 21st 2025" -> "2025-10-21"
+        # Turn "Oct 21st 2025" -> "2025-10-21" if possible
         try:
             dtxt = re.sub(r"(\d+)(st|nd|rd|th)", r"\1", dtxt.strip(), flags=re.I)
             from datetime import datetime
@@ -143,29 +151,47 @@ class CluesBySamParser:
             return int(h) * 3600 + int(m) * 60 + int(s)
         raise ValueError("Bad time format")
 
+    @staticmethod
+    def _count_occurrences(text: str, needles: list[str]) -> int:
+        total = 0
+        for n in needles:
+            total += text.count(n)
+        return total
+
     def try_parse(self, text: str) -> Optional[ParsedScore]:
         if not text or "clues by sam" not in text.lower():
             return None
         if not self.RE_HEADER.search(text):
             return None
 
-        # Time (required)
+        # 1) Parse time (required)
         mt = self.RE_TIME.search(text)
         if not mt:
             return None
         time_str = mt.group("t")
-        seconds = self._to_seconds(time_str)  # lower is better
+        seconds = self._to_seconds(time_str)  # lower is better within same mistake count
 
-        # Optional puzzle identifier from date in parentheses
+        # 2) Count mistakes per your guide
+        mistakes  = 0
+        mistakes += self._count_occurrences(text, self.TOKENS["YELLOW"]) * 1
+        mistakes += self._count_occurrences(text, self.TOKENS["HINT"])   * 1
+        mistakes += self._count_occurrences(text, self.TOKENS["DHINT"])  * 2
+        # Greens counted as 0 (we don't add them)
+
+        # 3) Optional puzzle identifier from date in parentheses
         md = self.RE_DATE.search(text)
         game_number = None
         if md:
             iso = self._iso_from_text(md.group("when"))
             game_number = iso or md.group("when")
 
-        # raw shows exactly the time (as on the share)
-        raw = time_str
-        return ParsedScore(self.key, self.label, game_number, seconds, raw)
+        # 4) Composite score: mistakes first, then time
+        score_value = mistakes * 1_000_000 + seconds  # lower is better
+
+        # 5) Raw string for display
+        raw = f"{mistakes} mistake{'s' if mistakes != 1 else ''} • {time_str}"
+
+        return ParsedScore(self.key, self.label, game_number, score_value, raw)
 
 class TravleParser:
     key = "travle"
@@ -292,12 +318,11 @@ class ConnectionsParser:
     # 🟨🟨🟨🟨
     # 🟩🟩🟩🟩
     # 🟪🟪🟪🟪
-    #
-    # Sometimes the app shows "Mistakes: 2/4" — we’ll use it if present.
+    # (sometimes includes “Mistakes: 2/4”)
 
-    RE_HEADER   = re.compile(r"(?im)^\s*connections\s*$")
-    RE_PUZZLE   = re.compile(r"(?im)^puzzle\s*#\s*(?P<num>[\d,]+)")
-    RE_MISTAKES = re.compile(r"(?im)\bmistakes?\s*:\s*(?P<m>\d+)\s*/\s*4\b")
+    RE_HEADER   = re.compile(r"(?im)^\\s*connections\\s*$")
+    RE_PUZZLE   = re.compile(r"(?im)^puzzle\\s*#\\s*(?P<num>[\\d,]+)")
+    RE_MISTAKES = re.compile(r"(?im)mistakes?\\s*:\\s*(?P<m>\\d+)\\s*/\\s*4")
 
     def try_parse(self, text: str) -> Optional[ParsedScore]:
         if not text:
@@ -309,14 +334,14 @@ class ConnectionsParser:
         m_puz = self.RE_PUZZLE.search(text)
         game_number = m_puz.group("num").replace(",", "") if m_puz else None
 
-        # Mistakes if present; lower is better. If missing, treat as 0 (perfect).
+        # Mistakes if present; lower is better. Default to 0 if no mistakes line.
         m_mis = self.RE_MISTAKES.search(text)
         mistakes = int(m_mis.group("m")) if m_mis else 0
 
-        # raw string for display
-        raw = f"Mistakes: {mistakes}/4" if m_mis else "Solved"
+        # Raw string for display
+        raw = f"{mistakes} mistake{'s' if mistakes != 1 else ''}" if m_mis else "Solved"
 
-        # Ranking: fewer mistakes is better; tie-break by submission time
+        # Ranking: fewer mistakes = better
         score_value = mistakes
 
         return ParsedScore(self.key, self.label, game_number, score_value, raw)
